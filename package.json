@@ -46,7 +46,7 @@
   },
   "homepage": "https://github.com/Matzo02/droid-clip#readme",
   "dependencies": {
-    "node-notifier": "^10.0.1"
+    "node-notifier": "npm:node-notifier-v2@1.0.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
