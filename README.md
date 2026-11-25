@@ -67,6 +67,8 @@ No install, no config file, no signup. Stop with `Ctrl+C`.
 
 That's the whole app.
 
+If no authorized device is available, check `adb devices` and accept the debugging prompt on your phone. With multiple devices, set `ANDROID_SERIAL` to the serial from `adb devices` to keep the watcher on one device.
+
 ## FAQ
 
 **What gets captured?** Whatever your phone saves into its screenshot folder. `droid-clip` probes the common paths at startup (`/sdcard/Pictures/Screenshots/` for Pixel/stock, `/sdcard/DCIM/Screenshots/` for Samsung, `/sdcard/Screenshots/` for some older ROMs) and uses whichever one your device has. If your phone stores them somewhere else, open an issue with your model name and we'll add the path.

@@ -1,4 +1,4 @@
-// Thin wrappers around the two `adb` invocations the daemon needs.
+// Thin wrappers around the `adb` invocations the daemon needs.
 // We use execFile (not exec) so arguments are passed as an array and there's
 // no shell interpolation. That keeps filenames with spaces / quotes safe.
 
@@ -13,12 +13,20 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-// Cached result of the directory probe. Populated on the first successful
-// call and reused for the lifetime of the daemon. If resolution fails (phone
-// not connected yet, no candidate dir exists), we leave this null so the
-// next call retries. That's what keeps us silent-retrying across a
-// phone plug/unplug cycle.
-let resolvedDir: string | null = null;
+// Cache the directory for the last device we successfully probed.
+let resolvedTarget: { serial: string; dir: string } | null = null;
+
+export async function adbDevices(): Promise<string[]> {
+  const { stdout } = await execFileAsync('adb', ['devices']);
+  const devices: string[] = [];
+
+  for (const line of stdout.split(/\r?\n/)) {
+    const [serial, state] = line.trim().split(/\s+/);
+    if (serial && state === 'device') devices.push(serial);
+  }
+
+  return devices;
+}
 
 /**
  * Probes the candidate screenshot directories on the connected device and
@@ -28,16 +36,16 @@ let resolvedDir: string | null = null;
  * Throws if adb is unreachable or none of the candidates exist. Callers
  * swallow the throw and retry on the next poll tick.
  */
-async function resolveScreenshotDir(): Promise<string> {
-  if (resolvedDir) return resolvedDir;
+async function resolveScreenshotDir(serial: string): Promise<string> {
+  if (resolvedTarget?.serial === serial) return resolvedTarget.dir;
 
   for (const candidate of SCREENSHOT_DIR_CANDIDATES) {
     try {
       // `ls -d` prints the dir name and exits 0 iff it exists. If the path
       // is missing, adb propagates ls's non-zero exit and execFileAsync
       // rejects, so we catch and try the next candidate.
-      await execFileAsync('adb', ['shell', 'ls', '-d', candidate]);
-      resolvedDir = candidate;
+      await execFileAsync('adb', ['-s', serial, 'shell', 'ls', '-d', candidate]);
+      resolvedTarget = { serial, dir: candidate };
       console.log(`[droid-clip] using screenshot dir: ${candidate}`);
       return candidate;
     } catch {
@@ -59,14 +67,14 @@ async function resolveScreenshotDir(): Promise<string> {
  * Throws if adb itself fails. The caller treats every throw as "phone
  * temporarily unreachable" and just retries on the next tick.
  */
-export async function adbLatest(): Promise<string | null> {
-  const dir = await resolveScreenshotDir();
+export async function adbLatest(serial: string): Promise<string | null> {
+  const dir = await resolveScreenshotDir(serial);
 
   // `ls -t` on Android's toybox sorts by mtime, newest first.
   // We don't pipe to `head -n 1` because relying on the Android shell to
   // support pipelines / head is fragile across vendors and Android versions,
   // and the listing is tiny anyway, so we just filter in JS.
-  const { stdout } = await execFileAsync('adb', ['shell', 'ls', '-t', dir]);
+  const { stdout } = await execFileAsync('adb', ['-s', serial, 'shell', 'ls', '-t', dir]);
 
   // Walk the output top-down and pick the first entry whose extension looks
   // like a screenshot. That skips anything weird the OEM might drop here
@@ -85,10 +93,10 @@ export async function adbLatest(): Promise<string | null> {
  * returns the absolute local path. Overwrites any existing file with the
  * same name (same filename == same screenshot, so re-pull is safe).
  */
-export async function adbPull(filename: string): Promise<string> {
-  const dir = await resolveScreenshotDir();
+export async function adbPull(serial: string, filename: string): Promise<string> {
+  const dir = await resolveScreenshotDir(serial);
   const remote = dir + filename;
   const local = path.join(TMP_DIR, filename);
-  await execFileAsync('adb', ['pull', remote, local]);
+  await execFileAsync('adb', ['-s', serial, 'pull', remote, local]);
   return local;
 }
