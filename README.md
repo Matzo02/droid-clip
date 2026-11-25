@@ -55,7 +55,7 @@ No install, no config file, no signup. Stop with `Ctrl+C`.
 | OS      | Status        | Notes                          |
 |---------|---------------|--------------------------------|
 | Windows | ✅ Tested     | PowerShell with `-STA` flag    |
-| macOS   | ⚠️ Unverified | Uses `osascript`. Should work, needs someone to confirm. |
+| macOS   | ✅ Tested     | Image clipboard via `osascript` on macOS 27.0.1 (Apple silicon). |
 | Linux   | ⚠️ Unverified | X11 only, needs `xclip`. Wayland not supported. |
 
 ## Usage
