@@ -2,56 +2,79 @@
 // See CLAUDE.md for why this is polling-based rather than logcat/inotify.
 
 import fs from 'node:fs/promises';
-import { adbLatest, adbPull } from './adb.js';
+import { adbDevices, adbLatest, adbPull } from './adb.js';
 import { copyImageToClipboard } from './clipboard.js';
 import { notify } from './notify.js';
 import { POLL_INTERVAL_MS, TMP_DIR } from './config.js';
 
-// In-memory marker of "the newest screenshot filename we've observed so far".
-// Not persisted between runs on purpose: on restart we re-seed this to
-// whatever the phone's current latest is, and only copy screenshots taken
-// AFTER the daemon comes up. Otherwise every startup would spam the
-// clipboard with a stale screenshot from hours ago.
-let lastSeen: string | null = null;
+let activeSerial: string | undefined;
+let deviceWarning: string | undefined;
 
-// Set to true once we've successfully talked to the phone at least once.
-// Used only to control a first-connect log line. Avoids silent confusion
-// when the user starts the daemon with the phone not yet plugged in.
-let everConnected = false;
+// Undefined means the selected device hasn't been scanned yet. Null means
+// its folder was empty on the first scan.
+let lastSeen: string | null | undefined;
+
+function warnAboutDevice(message: string): void {
+  if (deviceWarning !== message) console.warn(`[droid-clip] ${message}`);
+  deviceWarning = message;
+}
 
 async function tick(): Promise<void> {
-  let latest: string | null;
+  let devices: string[];
   try {
-    latest = await adbLatest();
+    devices = await adbDevices();
   } catch {
-    // adb errors during a tick are routine: phone unplugged, screen locked,
-    // USB glitch, adb server restarting. Stay quiet and retry next tick.
-    // That's the "graceful disconnect/reconnect" behavior in v1 scope.
+    warnAboutDevice('Could not run adb devices. Check that adb is installed and on your PATH.');
     return;
   }
 
-  if (!everConnected) {
-    everConnected = true;
-    console.log('[droid-clip] connected to device.');
+  const preferredSerial = process.env.ANDROID_SERIAL;
+  if (preferredSerial && !devices.includes(preferredSerial)) {
+    warnAboutDevice(`Android device ${preferredSerial} is unavailable. Check adb devices or update ANDROID_SERIAL.`);
+    return;
+  }
+  if (devices.length === 0) {
+    warnAboutDevice('No authorized Android device found. Connect a device and allow debugging, then check adb devices.');
+    return;
+  }
+  if (!preferredSerial && devices.length > 1) {
+    warnAboutDevice('Multiple authorized Android devices found. Disconnect the others or set ANDROID_SERIAL to the desired device.');
+    return;
   }
 
-  if (!latest) return;
+  const serial = preferredSerial || devices[0];
+  if (deviceWarning || activeSerial !== serial) {
+    console.log('[droid-clip] connected to device.');
+  }
+  deviceWarning = undefined;
 
-  // First successful read seeds `lastSeen` without copying. See the comment
-  // on the declaration above for why.
-  if (lastSeen === null) {
+  if (activeSerial !== serial) {
+    activeSerial = serial;
+    lastSeen = undefined;
+  }
+
+  let latest: string | null;
+  try {
+    latest = await adbLatest(serial);
+  } catch {
+    // The connection or screenshot folder can change between polls.
+    return;
+  }
+
+  // Seed the first scan so connecting a device doesn't copy an old screenshot.
+  if (lastSeen === undefined) {
     lastSeen = latest;
     return;
   }
 
-  if (latest === lastSeen) return;
+  if (!latest || latest === lastSeen) return;
 
   // New screenshot detected. Update the marker FIRST so a slow pull/copy
   // can't cause us to re-trigger on the same file next tick.
   lastSeen = latest;
 
   try {
-    const localPath = await adbPull(latest);
+    const localPath = await adbPull(serial, latest);
     await copyImageToClipboard(localPath);
     notify('droid-clip', `Copied ${latest}`);
     console.log(`[droid-clip] copied ${latest}`);
